@@ -1,0 +1,86 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from groq import Groq
+import os
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+class HealthData(BaseModel):
+    resting_heart_rate: float = 0
+    hrv: float = 0
+    sleep_hours: float = 0
+    steps: float = 0
+    readiness_score: int = 0
+    goal: str = "набор мышечной массы"
+
+@app.get("/")
+def root():
+    return {"status": "FitAI backend работает"}
+
+@app.post("/get-plan")
+async def get_plan(data: HealthData):
+    rhr_status = "в норме"
+    if data.resting_heart_rate > 70:
+        rhr_status = "повышенный — признак усталости"
+    elif data.resting_heart_rate > 63:
+        rhr_status = "немного выше нормы"
+
+    sleep_status = "хороший"
+    if data.sleep_hours < 5:
+        sleep_status = "очень мало"
+    elif data.sleep_hours < 6.5:
+        sleep_status = "недостаточно"
+    elif data.sleep_hours < 7:
+        sleep_status = "нормально, но можно лучше"
+
+    hrv_status = "нет данных"
+    if data.hrv > 0:
+        if data.hrv > 60:
+            hrv_status = "отличный"
+        elif data.hrv > 40:
+            hrv_status = "хороший"
+        elif data.hrv > 25:
+            hrv_status = "средний"
+        else:
+            hrv_status = "низкий"
+
+    prompt = f"""Ты персональный AI-тренер. Говоришь кратко, конкретно, по-русски.
+
+Данные пользователя:
+- Пульс покоя: {data.resting_heart_rate:.0f} уд/мин ({rhr_status})
+- HRV: {data.hrv:.0f} мс ({hrv_status})
+- Сон: {data.sleep_hours:.1f} часов ({sleep_status})
+- Шагов сегодня: {data.steps:.0f}
+- Готовность: {data.readiness_score}%
+- Цель: {data.goal}
+
+Составь план тренировки на сегодня. Структура:
+
+**Оценка состояния:** (1-2 предложения)
+
+**Тренировка на сегодня:** (упражнения с подходами и повторениями)
+
+**Важно сегодня:** (совет по восстановлению или питанию)
+
+Если восстановление плохое — предложи лёгкую тренировку или отдых."""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1000
+    )
+
+    return {
+        "plan": response.choices[0].message.content,
+        "readiness": data.readiness_score
+    }
