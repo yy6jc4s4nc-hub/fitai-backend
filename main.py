@@ -22,6 +22,11 @@ class HealthData(BaseModel):
     steps: float = 0
     readiness_score: int = 0
     goal: str = "набор мышечной массы"
+    age: int = 20
+    weight: float = 75
+    name: str = ""
+    active_minutes: float = 0
+    stand_hours: int = 0
 
 @app.get("/")
 def root():
@@ -67,8 +72,13 @@ async def get_plan(data: HealthData):
 - Вариабельность пульса: {data.hrv:.0f} мс ({hrv_status})
 - Сон: {data.sleep_hours:.1f} часов ({sleep_status})
 - Шагов сегодня: {data.steps:.0f}
+- Активных минут сегодня: {data.active_minutes:.0f} мин
+- Часов стояния: {data.stand_hours} ч
 - Готовность: {data.readiness_score}%
 - Цель пользователя: {data.goal}
+- Возраст: {data.age} лет
+- Вес: {data.weight:.1f} кг
+{f"- Имя пользователя: {data.name}" if data.name else ""}
 
 Составь план тренировки на сегодня по следующей структуре:
 
