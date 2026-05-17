@@ -113,7 +113,11 @@ async def get_plan(data_in: HealthData):
                 }
             )
             result = resp.json()
-            plan_text = result["choices"][0]["message"]["content"]
+            print(f"ОТВЕТ API: {result}")
+            if "choices" in result:
+                plan_text = result["choices"][0]["message"]["content"]
+            else:
+                plan_text = str(result)
 
         return {
             "plan": plan_text,
