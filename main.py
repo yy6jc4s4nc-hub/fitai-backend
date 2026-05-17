@@ -27,6 +27,7 @@ class HealthData(BaseModel):
     active_minutes: float = 0
     stand_hours: int = 0
     height: int = 175
+    sport: str = "общая физическая форма"
 
 @app.get("/")
 def root():
@@ -80,6 +81,7 @@ async def get_plan(data_in: HealthData):
 - Часов стояния: {data_in.stand_hours} ч
 - Готовность: {data_in.readiness_score}%
 - Цель пользователя: {data_in.goal}
+- Вид спорта: {data_in.sport}
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
