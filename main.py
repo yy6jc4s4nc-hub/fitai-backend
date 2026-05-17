@@ -1,8 +1,9 @@
+# -*- coding: utf-8 -*-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from groq import Groq
 import os
+import httpx
 
 app = FastAPI()
 
@@ -12,8 +13,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 class HealthData(BaseModel):
     resting_heart_rate: float = 0
@@ -34,35 +33,35 @@ def root():
     return {"status": "FitAI backend работает"}
 
 @app.post("/get-plan")
-async def get_plan(data: HealthData):
+async def get_plan(data_in: HealthData):
     rhr_status = "в норме"
-    if data.resting_heart_rate > 70:
+    if data_in.resting_heart_rate > 70:
         rhr_status = "повышенный — признак усталости"
-    elif data.resting_heart_rate > 63:
+    elif data_in.resting_heart_rate > 63:
         rhr_status = "немного выше нормы"
 
     sleep_status = "хороший"
-    if data.sleep_hours < 5:
+    if data_in.sleep_hours < 5:
         sleep_status = "очень мало"
-    elif data.sleep_hours < 6.5:
+    elif data_in.sleep_hours < 6.5:
         sleep_status = "недостаточно"
-    elif data.sleep_hours < 7:
+    elif data_in.sleep_hours < 7:
         sleep_status = "нормально, но можно лучше"
 
     hrv_status = "нет данных"
-    if data.hrv > 0:
-        if data.hrv > 60:
+    if data_in.hrv > 0:
+        if data_in.hrv > 60:
             hrv_status = "отличный"
-        elif data.hrv > 40:
+        elif data_in.hrv > 40:
             hrv_status = "хороший"
-        elif data.hrv > 25:
+        elif data_in.hrv > 25:
             hrv_status = "средний"
         else:
             hrv_status = "низкий"
 
     name_part = ""
-    if data.name:
-        name_part = f"Обращайся к пользователю по имени {data.name}, правильно склоняя его по падежам в зависимости от контекста предложения (именительный, родительный, дательный и т.д.). "
+    if data_in.name:
+        name_part = f"Обращайся к пользователю по имени {data_in.name}, правильно склоняя его по падежам в зависимости от контекста предложения. "
 
     prompt = f"""Ты персональный AI-тренер. Отвечай строго на русском языке. {name_part}
 Правила оформления текста:
@@ -73,18 +72,18 @@ async def get_plan(data: HealthData):
 - Упражнения перечисляй через дефис: "- Название: подходы и повторения"
 
 Данные пользователя:
-- Пульс покоя: {data.resting_heart_rate:.0f} уд/мин ({rhr_status})
-- Вариабельность пульса: {data.hrv:.0f} мс ({hrv_status})
-- Сон: {data.sleep_hours:.1f} часов ({sleep_status})
-- Шагов сегодня: {data.steps:.0f}
-- Активных минут сегодня: {data.active_minutes:.0f} мин
-- Часов стояния: {data.stand_hours} ч
-- Готовность: {data.readiness_score}%
-- Цель пользователя: {data.goal}
-- Возраст: {data.age} лет
-- Вес: {data.weight:.1f} кг
-- Рост: {data.height} см
-- Имя: {data.name if data.name else "не указано"}
+- Пульс покоя: {data_in.resting_heart_rate:.0f} уд/мин ({rhr_status})
+- Вариабельность пульса: {data_in.hrv:.0f} мс ({hrv_status})
+- Сон: {data_in.sleep_hours:.1f} часов ({sleep_status})
+- Шагов сегодня: {data_in.steps:.0f}
+- Активных минут сегодня: {data_in.active_minutes:.0f} мин
+- Часов стояния: {data_in.stand_hours} ч
+- Готовность: {data_in.readiness_score}%
+- Цель пользователя: {data_in.goal}
+- Возраст: {data_in.age} лет
+- Вес: {data_in.weight:.1f} кг
+- Рост: {data_in.height} см
+- Имя: {data_in.name if data_in.name else "не указано"}
 
 Составь план тренировки на сегодня по следующей структуре:
 
@@ -99,13 +98,30 @@ async def get_plan(data: HealthData):
 
 Если восстановление плохое — предложи лёгкую тренировку или отдых."""
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1000
-    )
+    try:
+        async with httpx.AsyncClient(timeout=60) as http:
+            resp = await http.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "meta-llama/llama-3.3-70b-instruct:free",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1000
+                }
+            )
+            result = resp.json()
+            plan_text = result["choices"][0]["message"]["content"]
 
-    return {
-        "plan": response.choices[0].message.content,
-        "readiness": data.readiness_score
-    }
+        return {
+            "plan": plan_text,
+            "readiness": data_in.readiness_score
+        }
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return {
+            "plan": f"Ошибка: {str(e)}",
+            "readiness": data_in.readiness_score
+        }
