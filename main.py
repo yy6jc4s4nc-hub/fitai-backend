@@ -107,7 +107,7 @@ async def get_plan(data_in: HealthData):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "google/gemma-3-27b-it:free",
+                    "model": "mistralai/mistral-7b-instruct:free",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 1000
                 }
