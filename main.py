@@ -107,7 +107,7 @@ async def get_plan(data_in: HealthData):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "mistralai/mistral-7b-instruct:free",
+                    "model": "openai/gpt-4o-mini",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 1000
                 }
