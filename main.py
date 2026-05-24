@@ -28,8 +28,8 @@ class HealthData(BaseModel):
     stand_hours: int = 0
     height: int = 175
     sport: str = "общая физическая форма"
-    experience: str = "средний"  # добавлено: начинающий, средний, продвинутый
-    detailed: bool = True        # добавлено: True = подробный план, False = краткий
+    experience: str = "средний"
+    detailed: bool = True
 
 @app.get("/")
 def root():
@@ -92,7 +92,10 @@ async def get_plan(data_in: HealthData):
 - Рост: {data_in.height} см
 - Имя: {data_in.name if data_in.name else "не указано"}
 
-Составь ПОДРОБНЫЙ план тренировки. Оценку состояния НЕ пиши — она уже есть у пользователя.
+Составь ПОДРОБНЫЙ план тренировки.
+
+Оценка состояния:
+(напиши 2-3 предложения о текущем состоянии тела на основе показателей пульса, сна, HRV и готовности)
 
 Тренировка на сегодня:
 Распиши подробно для цели "{data_in.goal}" и вида спорта "{data_in.sport}":
@@ -134,7 +137,7 @@ async def get_plan(data_in: HealthData):
 - Рост: {data_in.height} см
 - Имя: {data_in.name if data_in.name else "не указано"}
 
-Составь КРАТКИЙ план тренировки:
+Составь КРАТКИЙ план тренировки.
 
 Оценка состояния:
 (1-2 предложения о состоянии тела и готовности к нагрузке)
