@@ -66,13 +66,21 @@ async def get_plan(data_in: HealthData):
         else:
             hrv_status = "низкий"
 
+    # Если нет HRV но есть данные опросника — используем их
+    has_wearable_data = data_in.hrv > 0 or data_in.resting_heart_rate > 0
+    has_wellness_data = data_in.wellness_description != ""
+    if not has_wearable_data and has_wellness_data:
+        wellness_note = f"Данные с часов недоступны. Используй субъективную оценку пользователя: {data_in.wellness_description}"
+    else:
+        wellness_note = ""
+
     name_part = ""
     if data_in.name:
         name_part = f"Обращайся к пользователю по имени {data_in.name}, правильно склоняя его по падежам в зависимости от контекста предложения. "
 
-    # КРАТКИЙ ПЛАН (по умолчанию) — оценка состояния подробная, остальное тезисно
+    # КРАТКИЙ ПЛАН
     if not data_in.detailed:
-        prompt = f"""Ты персональный AI-тренер. Отвечай строго на русском языке. {name_part}
+        prompt = f"""Ты персональный AI-тренер. Отвечай строго на русском языке. {name_part}{wellness_note}
 Правила оформления текста:
 - Никаких английских слов, символов или иероглифов
 - Никаких символов * или ** в тексте
@@ -97,7 +105,6 @@ async def get_plan(data_in: HealthData):
 - Рост: {data_in.height} см
 {f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
 
-
 Составь КРАТКИЙ ТЕЗИСНЫЙ план тренировки.
 
 Оценка состояния:
@@ -111,9 +118,9 @@ async def get_plan(data_in: HealthData):
 
 Если восстановление плохое — предложи отдых или лёгкую активность."""
 
-    # ПОДРОБНЫЙ ПЛАН (при нажатии на кнопку)
+    # ПОДРОБНЫЙ ПЛАН
     else:
-        prompt = f"""Ты персональный AI-тренер. Отвечай строго на русском языке. {name_part}
+        prompt = f"""Ты персональный AI-тренер. Отвечай строго на русском языке. {name_part}{wellness_note}
 Правила оформления текста:
 - Никаких английских слов, символов или иероглифов
 - Никаких символов * или ** в тексте
@@ -136,11 +143,9 @@ async def get_plan(data_in: HealthData):
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
 - Имя: {data_in.name if data_in.name else "не указано"}
+{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
 
-Составь ПОДРОБНЫЙ план тренировки.
-
-Оценка состояния:
-(2-3 предложения подробно о состоянии тела на основе пульса, сна, HRV и готовности)
+Составь ПОДРОБНЫЙ план тренировки. Оценку состояния НЕ пиши — она уже есть у пользователя.
 
 Тренировка на сегодня:
 Распиши подробно для цели "{data_in.goal}" и вида спорта "{data_in.sport}":
