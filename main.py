@@ -30,6 +30,10 @@ class HealthData(BaseModel):
     sport: str = "общая физическая форма"
     experience: str = "средний"
     detailed: bool = False
+    wellness_feeling: int = 0
+    wellness_soreness: int = 0
+    wellness_sleep: int = 0
+    wellness_description: str = ""
 
 @app.get("/")
 def root():
@@ -91,6 +95,8 @@ async def get_plan(data_in: HealthData):
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
+{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
+
 
 Составь КРАТКИЙ ТЕЗИСНЫЙ план тренировки.
 
