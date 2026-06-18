@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-from fastapi import FastAPI
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import httpx
+
+from decrypt_payload import decrypt_plan_request_body
 
 app = FastAPI()
 
@@ -35,13 +39,26 @@ class HealthData(BaseModel):
     wellness_sleep: int = 0
     wellness_description: str = ""
     years_of_experience: int = 0
+    cycle_tracking_enabled: bool = False
+    cycle_phase: str = ""
+    cycle_phase_description: str = ""
+    cycle_day: Optional[int] = None
+    cycle_length: Optional[int] = None
+    period_length: Optional[int] = None
 
 @app.get("/")
 def root():
     return {"status": "FitAI backend работает"}
 
 @app.post("/get-plan")
-async def get_plan(data_in: HealthData):
+async def get_plan(request: Request):
+    try:
+        raw_body = await request.json()
+        decrypted = decrypt_plan_request_body(raw_body)
+        data_in = HealthData(**decrypted)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid request payload: {exc}")
+
     rhr_status = "в норме"
     if data_in.resting_heart_rate > 70:
         rhr_status = "повышенный — признак усталости"
@@ -95,6 +112,14 @@ async def get_plan(data_in: HealthData):
     if data_in.name:
         name_part = f"Обращайся к пользователю по имени {data_in.name}, правильно склоняя его по падежам. "
 
+    cycle_info = ""
+    if data_in.cycle_tracking_enabled:
+        cycle_info = (
+            f"- Менструальный цикл: фаза {data_in.cycle_phase}, "
+            f"день {data_in.cycle_day if data_in.cycle_day is not None else 'не указан'}\n"
+            f"- Рекомендации по фазе: {data_in.cycle_phase_description or data_in.cycle_phase}\n"
+        )
+
     # КРАТКИЙ ПЛАН
     if not data_in.detailed:
 
@@ -120,7 +145,7 @@ async def get_plan(data_in: HealthData):
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
-
+{cycle_info}
 Составь КРАТКИЙ ТЕЗИСНЫЙ план тренировки под уровень атлета "{athlete_level}".
 
 Оценка состояния:
@@ -160,7 +185,7 @@ async def get_plan(data_in: HealthData):
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
-{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
+{cycle_info}{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
 
 Составь КРАТКИЙ ТЕЗИСНЫЙ план тренировки под уровень атлета "{athlete_level}".
 
@@ -199,7 +224,7 @@ async def get_plan(data_in: HealthData):
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
-
+{cycle_info}
 Составь ПОДРОБНЫЙ план тренировки строго под уровень "{athlete_level}".
 Оценку состояния НЕ пиши — она уже показана пользователю.
 
@@ -241,8 +266,8 @@ async def get_plan(data_in: HealthData):
 - Возраст: {data_in.age} лет
 - Вес: {data_in.weight:.1f} кг
 - Рост: {data_in.height} см
-- Имя: {data_in.name if data_in.name else "не указано"}
-{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
+{cycle_info}- Имя: {data_in.name if data_in.name else "не указано"}
+{cycle_info}{f"- Субъективное самочувствие: {data_in.wellness_description}" if data_in.wellness_description else ""}
 
 Составь ПОДРОБНЫЙ план строго под уровень "{athlete_level}".
 Оценку состояния НЕ пиши — она уже показана пользователю.
