@@ -3,7 +3,7 @@ uvicorn
 httpx
 pydantic[email]
 cryptography
-passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 sqlalchemy
 psycopg2-binary
