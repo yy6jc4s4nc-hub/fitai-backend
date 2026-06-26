@@ -1,15 +1,23 @@
 # -*- coding: utf-8 -*-
-from typing import Optional
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import json
 import os
-import httpx
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
 
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.orm import Session
+
+from auth_utils import create_access_token, decode_access_token, hash_password, verify_password
+from database import User, UserSyncData, get_db, init_db
 from decrypt_payload import decrypt_plan_request_body
 
 app = FastAPI()
+security = HTTPBearer(auto_error=False)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,6 +25,157 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    name: str = Field(default="", max_length=80)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: str
+    email: str
+    name: str
+
+
+class UserProfileResponse(BaseModel):
+    user_id: str
+    email: str
+    name: str
+
+
+class SyncPushRequest(BaseModel):
+    payload: dict[str, Any]
+    updated_at: Optional[str] = None
+
+
+class SyncPullResponse(BaseModel):
+    payload: dict[str, Any]
+    updated_at: Optional[str] = None
+
+
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> User:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Требуется авторизация")
+
+    try:
+        token_data = decode_access_token(credentials.credentials)
+        user_id = token_data.get("sub")
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Недействительный токен") from exc
+
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    return user
+
+
+@app.post("/auth/register", response_model=AuthResponse)
+def register(body: RegisterRequest, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Аккаунт с таким email уже существует")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email,
+        password_hash=hash_password(body.password),
+        name=body.name.strip(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user_id=user.id, email=user.email)
+    return AuthResponse(
+        access_token=token,
+        user_id=user.id,
+        email=user.email,
+        name=user.name,
+    )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(body: LoginRequest, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if user is None or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+
+    token = create_access_token(user_id=user.id, email=user.email)
+    return AuthResponse(
+        access_token=token,
+        user_id=user.id,
+        email=user.email,
+        name=user.name,
+    )
+
+
+@app.get("/auth/me", response_model=UserProfileResponse)
+def me(current_user: User = Depends(get_current_user)):
+    return UserProfileResponse(
+        user_id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+    )
+
+
+@app.get("/sync/pull", response_model=SyncPullResponse)
+def sync_pull(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.get(UserSyncData, current_user.id)
+    if row is None:
+        return SyncPullResponse(payload={}, updated_at=None)
+
+    try:
+        payload = json.loads(row.payload)
+    except json.JSONDecodeError:
+        payload = {}
+
+    updated_at = row.updated_at.isoformat() if row.updated_at else None
+    return SyncPullResponse(payload=payload, updated_at=updated_at)
+
+
+@app.put("/sync/push", response_model=SyncPullResponse)
+def sync_push(
+    body: SyncPushRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    now = datetime.now(timezone.utc)
+    payload_json = json.dumps(body.payload, ensure_ascii=False)
+
+    row = db.get(UserSyncData, current_user.id)
+    if row is None:
+        row = UserSyncData(user_id=current_user.id, payload=payload_json, updated_at=now)
+        db.add(row)
+    else:
+        row.payload = payload_json
+        row.updated_at = now
+
+    db.commit()
+    db.refresh(row)
+
+    return SyncPullResponse(
+        payload=body.payload,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+    )
 
 class HealthData(BaseModel):
     resting_heart_rate: float = 0
