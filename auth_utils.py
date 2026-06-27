@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -14,11 +15,25 @@ def hash_password(password: str) -> str:
     return hashed.decode("utf-8")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
+def verify_password(plain_password: str, hashed_password: str | None) -> bool:
+    if not hashed_password:
+        return False
     return bcrypt.checkpw(
         plain_password.encode("utf-8"),
         hashed_password.encode("utf-8"),
     )
+
+
+def hash_reset_code(code: str) -> str:
+    return hash_password(code)
+
+
+def verify_reset_code(code: str, code_hash: str) -> bool:
+    return verify_password(code, code_hash)
+
+
+def generate_reset_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def create_access_token(*, user_id: str, email: str) -> str:

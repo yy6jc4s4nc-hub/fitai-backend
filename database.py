@@ -19,8 +19,19 @@ class User(Base):
 
     id = Column(String, primary_key=True)
     email = Column(String, unique=True, index=True, nullable=False)
-    password_hash = Column(String, nullable=False)
+    password_hash = Column(String, nullable=True)
+    apple_sub = Column(String, unique=True, index=True, nullable=True)
     name = Column(String, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PasswordResetCode(Base):
+    __tablename__ = "password_reset_codes"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

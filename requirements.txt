@@ -1,9 +1,10 @@
-fastapi
-uvicorn
-httpx
-pydantic[email]
-cryptography
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+openai==1.57.4
+cryptography==44.0.0
+pydantic[email]==2.10.3
 bcrypt
 python-jose[cryptography]
-sqlalchemy
+PyJWT[crypto]
+sqlalchemy==2.0.36
 psycopg2-binary

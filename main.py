@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -12,9 +11,20 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
-from auth_utils import create_access_token, decode_access_token, hash_password, verify_password
-from database import User, UserSyncData, get_db, init_db
+from apple_auth import verify_apple_identity_token
+from auth_utils import (
+    create_access_token,
+    decode_access_token,
+    generate_reset_code,
+    hash_password,
+    hash_reset_code,
+    verify_password,
+    verify_reset_code,
+)
+from database import PasswordResetCode, User, UserSyncData, get_db, init_db
 from decrypt_payload import decrypt_plan_request_body
+from email_service import send_password_reset_email, smtp_configured
+from privacy_policy import PRIVACY_POLICY_RU
 
 app = FastAPI()
 security = HTTPBearer(auto_error=False)
@@ -67,6 +77,41 @@ class SyncPullResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class AppleLoginRequest(BaseModel):
+    identity_token: str = Field(min_length=10)
+    name: str = Field(default="", max_length=80)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
+class PrivacyPolicyResponse(BaseModel):
+    title: str
+    updated_at: str
+    content: str
+
+
+def auth_response_for(user: User) -> AuthResponse:
+    token = create_access_token(user_id=user.id, email=user.email)
+    return AuthResponse(
+        access_token=token,
+        user_id=user.id,
+        email=user.email,
+        name=user.name or "",
+    )
+
+
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
@@ -102,29 +147,120 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-
-    token = create_access_token(user_id=user.id, email=user.email)
-    return AuthResponse(
-        access_token=token,
-        user_id=user.id,
-        email=user.email,
-        name=user.name,
-    )
+    return auth_response_for(user)
 
 
 @app.post("/auth/login", response_model=AuthResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     email = body.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
-    if user is None or not verify_password(body.password, user.password_hash):
+    if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    return auth_response_for(user)
 
-    token = create_access_token(user_id=user.id, email=user.email)
-    return AuthResponse(
-        access_token=token,
-        user_id=user.id,
-        email=user.email,
-        name=user.name,
+
+@app.post("/auth/apple", response_model=AuthResponse)
+def apple_login(body: AppleLoginRequest, db: Session = Depends(get_db)):
+    try:
+        claims = verify_apple_identity_token(body.identity_token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Не удалось проверить Apple ID") from exc
+
+    apple_sub = claims.get("sub")
+    if not apple_sub:
+        raise HTTPException(status_code=401, detail="Некорректный Apple ID")
+
+    email = (claims.get("email") or "").strip().lower()
+    user = db.query(User).filter(User.apple_sub == apple_sub).first()
+
+    if user is None and email:
+        user = db.query(User).filter(User.email == email).first()
+        if user:
+            user.apple_sub = apple_sub
+
+    if user is None:
+        if not email:
+            email = f"{apple_sub}@appleid.fitai"
+        existing_email = db.query(User).filter(User.email == email).first()
+        if existing_email:
+            existing_email.apple_sub = apple_sub
+            user = existing_email
+        else:
+            user = User(
+                id=str(uuid.uuid4()),
+                email=email,
+                password_hash=None,
+                apple_sub=apple_sub,
+                name=body.name.strip(),
+            )
+            db.add(user)
+
+    if body.name.strip() and not user.name:
+        user.name = body.name.strip()
+
+    db.commit()
+    db.refresh(user)
+    return auth_response_for(user)
+
+
+@app.post("/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+
+    if user and user.password_hash and smtp_configured():
+        code = generate_reset_code()
+        db.query(PasswordResetCode).filter(PasswordResetCode.user_id == user.id).delete()
+        db.add(
+            PasswordResetCode(
+                id=str(uuid.uuid4()),
+                user_id=user.id,
+                code_hash=hash_reset_code(code),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+            )
+        )
+        db.commit()
+        try:
+            send_password_reset_email(to_email=email, code=code)
+        except Exception:
+            pass
+
+    return MessageResponse(
+        message="Если аккаунт существует, мы отправили код для сброса пароля на email"
+    )
+
+
+@app.post("/auth/reset-password", response_model=MessageResponse)
+def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Неверный email или код")
+
+    reset_row = (
+        db.query(PasswordResetCode)
+        .filter(PasswordResetCode.user_id == user.id)
+        .order_by(PasswordResetCode.created_at.desc())
+        .first()
+    )
+    if reset_row is None or reset_row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Неверный email или код")
+    if not verify_reset_code(body.code, reset_row.code_hash):
+        raise HTTPException(status_code=400, detail="Неверный email или код")
+
+    user.password_hash = hash_password(body.new_password)
+    db.query(PasswordResetCode).filter(PasswordResetCode.user_id == user.id).delete()
+    db.commit()
+
+    return MessageResponse(message="Пароль обновлён. Теперь можно войти с новым паролем.")
+
+
+@app.get("/legal/privacy", response_model=PrivacyPolicyResponse)
+def privacy_policy():
+    return PrivacyPolicyResponse(
+        title="Политика конфиденциальности FitAI",
+        updated_at="2026-06-27",
+        content=PRIVACY_POLICY_RU,
     )
 
 
